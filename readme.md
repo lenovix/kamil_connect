@@ -53,29 +53,29 @@ cargo run
 
 ---
 
-## 🎯 Rencana Fitur Mendatang (v0.1.0 – v0.5.0)
+## 🎯 Rencana Fitur Mendatang (0.0.2 – v0.0.6)
 
-1. ### 🧩 Sistem Status & Presence  
+### 🧩 Sistem Status & Presence (0.0.2)
    Menampilkan status pengguna (online, idle, offline) secara otomatis dan manual.  
    - Menambahkan perintah `/status <pesan>`  
    - Status diperbarui berdasarkan aktivitas dan sinyal `HELLO`.
 
-2. ### 💬 Private Chat dengan History Lokal  
+### 💬 Private Chat dengan History Lokal (0.0.3)
    Menyimpan riwayat percakapan antar pengguna di folder `chat_logs/`.  
    - File log otomatis dibuat untuk setiap sesi chat pribadi.  
    - Mendukung penyimpanan teks dan timestamp pesan.
 
-3. ### 🌐 Grup Chat (Room System)  
+### 🌐 Grup Chat (Room System) (0.0.4)
    Menambahkan dukungan grup agar pengguna bisa membuat dan bergabung ke ruang obrolan.  
    - Perintah baru: `/create`, `/join`, `/leave`, `/groups`  
    - Pesan hanya diterima oleh anggota grup yang sama.
 
-4. ### 🔒 Enkripsi Pesan  
+### 🔒 Enkripsi Pesan (0.0.5)
    Menambahkan lapisan keamanan dengan enkripsi AES-256-GCM atau ChaCha20.  
    - Semua pesan (UDP & TCP) dienkripsi.  
    - Mendukung kunci sementara atau negosiasi antar pengguna.
 
-5. ### 🖥️ Antarmuka Pengguna (TUI/GUI)  
+### 🖥️ Antarmuka Pengguna (TUI/GUI) (0.0.6)
    Memberikan pengalaman pengguna yang lebih baik:  
    - Tahap awal: **TUI (Text UI)** dengan crate `tui` atau `crossterm`.  
    - Tahap lanjut: **GUI desktop** dengan framework seperti `egui` atau `tauri`.  
