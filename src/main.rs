@@ -161,50 +161,117 @@ fn tcp_server(listener: TcpListener) {
     }
 }
 
-fn handle_tcp_client(stream: TcpStream) {
+fn handle_tcp_client(mut stream: TcpStream) {
     let peer = stream.peer_addr().unwrap();
-    let reader = BufReader::new(stream.try_clone().unwrap());
-
     println!("\n[Connected TCP from {}]", peer);
-    for line in reader.lines() {
-        match line {
-            Ok(msg) => {
-                println!("\n[TCP:{}] {}", peer, msg);
-                print!("> ");
-                io::stdout().flush().unwrap();
+    print!("(TCP)> ");
+    io::stdout().flush().unwrap();
+
+    // Clone stream untuk reader
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut reader_stream = stream.try_clone().unwrap();
+
+    // Thread: menerima pesan
+    thread::spawn(move || {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    println!("\n[Connection closed by {}]", peer);
+                    break;
+                }
+                Ok(_) => {
+                    let msg = line.trim();
+                    if !msg.is_empty() {
+                        println!("\n[TCP:{}] {}", peer, msg);
+                        print!("(TCP)> ");
+                        io::stdout().flush().unwrap();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading from {}: {}", peer, e);
+                    break;
+                }
             }
-            Err(e) => {
-                eprintln!("Error reading from {}: {}", peer, e);
-                break;
-            }
+        }
+    });
+
+    // Thread utama: kirim pesan balik
+    let stdin = io::stdin();
+    let mut input = String::new();
+    loop {
+        input.clear();
+        stdin.read_line(&mut input).unwrap();
+        let msg = input.trim();
+
+        if msg == "/exit" {
+            println!("Menutup koneksi TCP dengan {}", peer);
+            break;
+        }
+
+        if let Err(e) = writeln!(reader_stream, "{}", msg) {
+            eprintln!("Error sending to {}: {}", peer, e);
+            break;
         }
     }
 }
-
 
 fn tcp_client(ip: String, port: u16) -> io::Result<()> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = TcpStream::connect(&addr)?;
     println!("Connected to {} via TCP. Type messages, /exit to close.", addr);
 
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut reader_stream = stream.try_clone().unwrap();
+
+    // Thread: menerima pesan dari lawan bicara
+    thread::spawn(move || {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    println!("\n[Connection closed by {}]", addr);
+                    break;
+                }
+                Ok(_) => {
+                    let msg = line.trim();
+                    if !msg.is_empty() {
+                        println!("\n[TCP:{}] {}", addr, msg);
+                        print!("(TCP)> ");
+                        io::stdout().flush().unwrap();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error reading from {}: {}", addr, e);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Thread utama: kirim pesan
+    let stdin = io::stdin();
     let mut input = String::new();
     loop {
         print!("(TCP)> ");
         io::stdout().flush()?;
         input.clear();
-        io::stdin().read_line(&mut input)?;
+        stdin.read_line(&mut input)?;
         let msg = input.trim();
 
         if msg == "/exit" {
-            println!("Closing connection.");
+            println!("Menutup koneksi TCP.");
             break;
         }
 
-        writeln!(stream, "{}", msg)?;
+        writeln!(reader_stream, "{}", msg)?;
     }
 
     Ok(())
 }
+
 
 fn local_ip() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
