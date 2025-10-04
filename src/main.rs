@@ -30,7 +30,8 @@ fn main() -> io::Result<()> {
     let udp_recv = udp_socket.try_clone()?;
 
     // --- Shared user list ---
-    let active_users: Arc<Mutex<HashMap<String, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+    let active_users: Arc<Mutex<HashMap<String, (String, Instant)>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Thread: Menerima pesan UDP
     {
@@ -48,10 +49,10 @@ fn main() -> io::Result<()> {
             let broadcast_addr: SocketAddr = SocketAddr::from((broadcast_ip, udp_port));
             let _ = udp_socket.send_to(msg.as_bytes(), broadcast_addr);
 
-            // Hapus user yang timeout (tidak aktif > 10 detik)
+            // Hapus user yang timeout (>10 detik)
             {
                 let mut users = users.lock().unwrap();
-                users.retain(|_, last_seen| last_seen.elapsed() < Duration::from_secs(10));
+                users.retain(|_, (_, last_seen)| last_seen.elapsed() < Duration::from_secs(10));
             }
 
             thread::sleep(Duration::from_secs(3));
@@ -62,16 +63,15 @@ fn main() -> io::Result<()> {
     let tcp_listener = TcpListener::bind(("0.0.0.0", tcp_port))?;
     println!("TCP listening on {}", tcp_port);
 
-    // Thread untuk menerima koneksi TCP masuk
     thread::spawn(move || tcp_server(tcp_listener));
 
     // --- Input utama pengguna ---
     println!("\nKamil Connect running!");
     println!("Commands:");
     println!("  (chat umum) ketik pesan biasa");
-    println!("  /connect <ip>  → mulai chat pribadi");
-    println!("  /users         → tampilkan user aktif");
-    println!("  /quit          → keluar\n");
+    println!("  /connect <nickname>  → mulai chat pribadi");
+    println!("  /users               → tampilkan user aktif");
+    println!("  /quit                → keluar\n");
 
     let broadcast_addr: SocketAddr = SocketAddr::from((broadcast_ip, udp_port));
 
@@ -89,25 +89,41 @@ fn main() -> io::Result<()> {
         if input == "/users" {
             let users = active_users.lock().unwrap();
             println!("\n--- User Aktif ---");
-            for (ip, last_seen) in users.iter() {
-                println!("{} ({} detik lalu)", ip, last_seen.elapsed().as_secs());
+            for (ip, (nick, last_seen)) in users.iter() {
+                if ip != &local_ip.to_string() {
+                    println!("{} ({} detik lalu)", nick, last_seen.elapsed().as_secs());
+                }
             }
             println!("------------------\n");
             continue;
         }
 
         if input.starts_with("/connect ") {
-            let parts: Vec<&str> = input.split_whitespace().collect();
-            if parts.len() == 2 {
-                let ip = parts[1];
-                if let Err(e) = tcp_client(ip.to_string(), tcp_port) {
-                    eprintln!("Failed to connect to {}: {}", ip, e);
-                }
+    let parts: Vec<&str> = input.split_whitespace().collect();
+    if parts.len() == 2 {
+        let target_nick = parts[1];
+        let users = active_users.lock().unwrap();
+
+        // Cari IP berdasarkan nickname
+        if let Some((ip, _)) = users.iter().find_map(|(ip, (nick, t))| {
+            if nick == target_nick {
+                Some((ip.clone(), t))
             } else {
-                println!("Usage: /connect <ip>");
+                None
             }
-            continue;
+        }) {
+            if let Err(e) = tcp_client(ip.to_string(), tcp_port) {
+                eprintln!("Failed to connect to {}: {}", ip, e);
+            }
+        } else {
+            println!("User '{}' tidak ditemukan.", target_nick);
         }
+    } else {
+        println!("Usage: /connect <nickname>");
+    }
+    continue;
+}
+
 
         // Kirim pesan umum (UDP)
         udp_socket.send_to(input.as_bytes(), broadcast_addr)?;
@@ -116,15 +132,15 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn udp_listener(socket: UdpSocket, users: Arc<Mutex<HashMap<String, Instant>>>) {
+fn udp_listener(socket: UdpSocket, users: Arc<Mutex<HashMap<String, (String, Instant)>>>) {
     let mut buf = [0u8; 1024];
     loop {
         if let Ok((amt, src)) = socket.recv_from(&mut buf) {
             let msg = String::from_utf8_lossy(&buf[..amt]);
             if msg.starts_with("HELLO:") {
-                let _nick = msg.strip_prefix("HELLO:").unwrap_or("Unknown");
+                let nick = msg.strip_prefix("HELLO:").unwrap_or("Unknown").to_string();
                 let ip = src.ip().to_string();
-                users.lock().unwrap().insert(ip, Instant::now());
+                users.lock().unwrap().insert(ip, (nick, Instant::now()));
             } else {
                 println!("\n[UDP:{}] {}", src, msg);
                 print!("> ");
@@ -145,7 +161,7 @@ fn tcp_server(listener: TcpListener) {
     }
 }
 
-fn handle_tcp_client(mut stream: TcpStream) {
+fn handle_tcp_client(stream: TcpStream) {
     let peer = stream.peer_addr().unwrap();
     let reader = BufReader::new(stream.try_clone().unwrap());
 
@@ -164,6 +180,7 @@ fn handle_tcp_client(mut stream: TcpStream) {
         }
     }
 }
+
 
 fn tcp_client(ip: String, port: u16) -> io::Result<()> {
     let addr = format!("{}:{}", ip, port);
