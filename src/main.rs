@@ -1,46 +1,41 @@
-use std::io::{self, Write};
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::thread;
 
 fn main() -> io::Result<()> {
-    let port = 34254;
+    let udp_port = 34254;
+    let tcp_port = 40000;
 
-    // 🔍 Deteksi IP lokal (IPv4)
+    // --- Dapatkan IP lokal ---
     let local_ip = local_ip()?;
     println!("Detected local IP: {}", local_ip);
 
-    // Hitung alamat broadcast dari subnet kelas C (misal 192.168.x.255)
+    // --- Setup UDP ---
     let broadcast_ip = Ipv4Addr::new(local_ip.octets()[0], local_ip.octets()[1], local_ip.octets()[2], 255);
-    let broadcast_addr: SocketAddr = SocketAddr::from((broadcast_ip, port));
+    let udp_socket = UdpSocket::bind(("0.0.0.0", udp_port))?;
+    udp_socket.set_broadcast(true)?;
+    println!("UDP listening on {}", udp_port);
 
-    // 🔊 Bind ke semua interface supaya bisa menerima pesan broadcast
-    let socket = UdpSocket::bind(("0.0.0.0", port))?;
-    socket.set_broadcast(true)?;
-    println!("Listening on {:?}", socket.local_addr()?);
+    // --- Clone untuk thread UDP receiver ---
+    let udp_recv = udp_socket.try_clone()?;
+    thread::spawn(move || udp_listener(udp_recv));
 
-    // Clone socket untuk thread listener
-    let recv_socket = socket.try_clone()?;
+    // --- Setup TCP listener ---
+    let tcp_listener = TcpListener::bind(("0.0.0.0", tcp_port))?;
+    println!("TCP listening on {}", tcp_port);
 
-    // Thread untuk menerima pesan
-    thread::spawn(move || {
-        let mut buf = [0u8; 1024];
-        loop {
-            match recv_socket.recv_from(&mut buf) {
-                Ok((amt, src)) => {
-                    let msg = String::from_utf8_lossy(&buf[..amt]);
-                    println!("\n[{}] {}", src, msg);
-                    print!("> ");
-                    io::stdout().flush().unwrap();
-                }
-                Err(e) => eprintln!("Error receiving: {}", e),
-            }
-        }
-    });
+    // Thread untuk menerima koneksi TCP masuk
+    thread::spawn(move || tcp_server(tcp_listener));
 
-    println!("Kamil Connect (broadcast) running on port {}", port);
-    println!("Type your message and press Enter to send (/quit to exit):");
+    // --- Input utama pengguna ---
+    println!("Kamil Connect running!");
+    println!("Commands:");
+    println!("  (chat umum) ketik pesan biasa");
+    println!("  /connect <ip>  → mulai chat pribadi");
+    println!("  /quit          → keluar\n");
 
-    // Loop input user
+    let broadcast_addr: SocketAddr = SocketAddr::from((broadcast_ip, udp_port));
+
     loop {
         print!("> ");
         io::stdout().flush()?;
@@ -52,16 +47,97 @@ fn main() -> io::Result<()> {
             break;
         }
 
-        socket.send_to(input.as_bytes(), broadcast_addr)?;
+        // Mode perintah
+        if input.starts_with("/connect ") {
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            if parts.len() == 2 {
+                let ip = parts[1];
+                if let Err(e) = tcp_client(ip.to_string(), tcp_port) {
+                    eprintln!("Failed to connect to {}: {}", ip, e);
+                }
+            } else {
+                println!("Usage: /connect <ip>");
+            }
+            continue;
+        }
+
+        // Kirim pesan umum (UDP)
+        udp_socket.send_to(input.as_bytes(), broadcast_addr)?;
     }
 
     Ok(())
 }
 
-/// Deteksi IP lokal dengan membuat koneksi dummy ke alamat eksternal (tanpa benar-benar mengirim data)
+fn udp_listener(socket: UdpSocket) {
+    let mut buf = [0u8; 1024];
+    loop {
+        if let Ok((amt, src)) = socket.recv_from(&mut buf) {
+            let msg = String::from_utf8_lossy(&buf[..amt]);
+            println!("\n[UDP:{}] {}", src, msg);
+            print!("> ");
+            io::stdout().flush().unwrap();
+        }
+    }
+}
+
+fn tcp_server(listener: TcpListener) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                thread::spawn(move || handle_tcp_client(stream));
+            }
+            Err(e) => eprintln!("TCP accept error: {}", e),
+        }
+    }
+}
+
+fn handle_tcp_client(mut stream: TcpStream) {
+    let peer = stream.peer_addr().unwrap();
+    let reader = BufReader::new(stream.try_clone().unwrap());
+
+    println!("\n[Connected TCP from {}]", peer);
+    for line in reader.lines() {
+        match line {
+            Ok(msg) => {
+                println!("\n[TCP:{}] {}", peer, msg);
+                print!("> ");
+                io::stdout().flush().unwrap();
+            }
+            Err(e) => {
+                eprintln!("Error reading from {}: {}", peer, e);
+                break;
+            }
+        }
+    }
+}
+
+fn tcp_client(ip: String, port: u16) -> io::Result<()> {
+    let addr = format!("{}:{}", ip, port);
+    let mut stream = TcpStream::connect(&addr)?;
+    println!("Connected to {} via TCP. Type messages, /exit to close.", addr);
+
+    let mut input = String::new();
+    loop {
+        print!("(TCP)> ");
+        io::stdout().flush()?;
+        input.clear();
+        io::stdin().read_line(&mut input)?;
+        let msg = input.trim();
+
+        if msg == "/exit" {
+            println!("Closing connection.");
+            break;
+        }
+
+        writeln!(stream, "{}", msg)?;
+    }
+
+    Ok(())
+}
+
 fn local_ip() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
-    socket.connect("8.8.8.8:80")?; // Google DNS, hanya untuk tahu IP lokal kita
+    socket.connect("8.8.8.8:80")?;
     if let Ok(addr) = socket.local_addr() {
         if let std::net::IpAddr::V4(ipv4) = addr.ip() {
             return Ok(ipv4);
