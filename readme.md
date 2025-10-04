@@ -3,16 +3,16 @@
 Kamil Connect adalah aplikasi sederhana berbasis **Rust** untuk komunikasi antar komputer dalam satu jaringan lokal menggunakan **UDP** (untuk broadcast pesan umum) dan **TCP** (untuk chat pribadi).
 
 ## 🚀 Fitur Utama
-- **Broadcast pesan umum** ke seluruh jaringan via UDP
-- **Chat pribadi (direct message)** via TCP
-- **Deteksi pengguna aktif** otomatis melalui sinyal `HELLO`
-- **Real-time update** daftar pengguna aktif
+- **Broadcast pesan umum** ke seluruh jaringan via UDP  
+- **Chat pribadi (direct message)** via TCP  
+- **Deteksi pengguna aktif** otomatis melalui sinyal `HELLO`  
+- **Real-time update** daftar pengguna aktif  
 
 ## 🧱 Arsitektur
-- UDP digunakan untuk:
+- **UDP** digunakan untuk:
   - Broadcast pesan umum
   - Mengirim sinyal `HELLO:<nickname>` setiap 3 detik
-- TCP digunakan untuk:
+- **TCP** digunakan untuk:
   - Chat langsung antar 2 pengguna
 - Data pengguna disimpan sementara di `HashMap` yang disinkronisasi dengan `Arc<Mutex<...>>`
 
@@ -51,8 +51,41 @@ cargo run
 - Pastikan **firewall** mengizinkan akses port UDP `34254` dan TCP `40000`.
 - Jika pesan tidak terkirim, kemungkinan disebabkan oleh latency jaringan atau OS membatasi broadcast UDP.
 
+---
+
+## 🎯 Rencana Fitur Mendatang (v0.1.0 – v0.5.0)
+
+1. ### 🧩 Sistem Status & Presence  
+   Menampilkan status pengguna (online, idle, offline) secara otomatis dan manual.  
+   - Menambahkan perintah `/status <pesan>`  
+   - Status diperbarui berdasarkan aktivitas dan sinyal `HELLO`.
+
+2. ### 💬 Private Chat dengan History Lokal  
+   Menyimpan riwayat percakapan antar pengguna di folder `chat_logs/`.  
+   - File log otomatis dibuat untuk setiap sesi chat pribadi.  
+   - Mendukung penyimpanan teks dan timestamp pesan.
+
+3. ### 🌐 Grup Chat (Room System)  
+   Menambahkan dukungan grup agar pengguna bisa membuat dan bergabung ke ruang obrolan.  
+   - Perintah baru: `/create`, `/join`, `/leave`, `/groups`  
+   - Pesan hanya diterima oleh anggota grup yang sama.
+
+4. ### 🔒 Enkripsi Pesan  
+   Menambahkan lapisan keamanan dengan enkripsi AES-256-GCM atau ChaCha20.  
+   - Semua pesan (UDP & TCP) dienkripsi.  
+   - Mendukung kunci sementara atau negosiasi antar pengguna.
+
+5. ### 🖥️ Antarmuka Pengguna (TUI/GUI)  
+   Memberikan pengalaman pengguna yang lebih baik:  
+   - Tahap awal: **TUI (Text UI)** dengan crate `tui` atau `crossterm`.  
+   - Tahap lanjut: **GUI desktop** dengan framework seperti `egui` atau `tauri`.  
+   - Menampilkan daftar user, status, dan area chat dalam satu tampilan.
+
+---
+
 ## 📦 Versi
 **v0.0.1** — Rilis awal, mendukung broadcast UDP, TCP chat, dan deteksi user aktif.
 
 ---
-Dibuat oleh **len vix** ✨
+
+Dibuat oleh **Ichsanul Kamil Sudarmi** ✨
