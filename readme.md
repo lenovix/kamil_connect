@@ -1,4 +1,9 @@
-# Kamil Connect v0.0.1
+# 🛰️ Kamil Connect v0.0.1
+
+![Rust](https://img.shields.io/badge/Rust-Programming%20Language-orange)
+![Version](https://img.shields.io/badge/Version-v0.0.1-blue)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
 Kamil Connect adalah aplikasi sederhana berbasis **Rust** untuk komunikasi antar komputer dalam satu jaringan lokal menggunakan **UDP** (untuk broadcast pesan umum) dan **TCP** (untuk chat pribadi).
 
@@ -53,7 +58,7 @@ cargo run
 
 ---
 
-## 🎯 Rencana Fitur Mendatang (0.0.2 – v0.0.6)
+## 🎯 Rencana Fitur Mendatang
 
 ### 🧩 Sistem Status & Presence (0.0.2)
    Menampilkan status pengguna (online, idle, offline) secara otomatis dan manual.  
@@ -80,6 +85,9 @@ cargo run
    - Tahap awal: **TUI (Text UI)** dengan crate `tui` atau `crossterm`.  
    - Tahap lanjut: **GUI desktop** dengan framework seperti `egui` atau `tauri`.  
    - Menampilkan daftar user, status, dan area chat dalam satu tampilan.
+
+### 📁 File Transfer (0.0.7)
+   - Mengirim file antar perangkat melalui TCP stream.
 
 ---
 
