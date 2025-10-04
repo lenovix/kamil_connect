@@ -1,9 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+// --- ID pesan global ---
+static MSG_ID_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 fn main() -> io::Result<()> {
     let udp_port = 34254;
@@ -29,14 +34,20 @@ fn main() -> io::Result<()> {
 
     let udp_recv = udp_socket.try_clone()?;
 
-    // --- Shared user list ---
+    // --- Shared user list dan ACK state ---
     let active_users: Arc<Mutex<HashMap<String, (String, Instant)>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let received_acks: Arc<Mutex<HashSet<usize>>> = Arc::new(Mutex::new(HashSet::new()));
+
+    // --- Channel untuk ACK antara thread ---
+    let (ack_tx, ack_rx) = mpsc::channel::<usize>();
 
     // Thread: Menerima pesan UDP
     {
         let users = Arc::clone(&active_users);
-        thread::spawn(move || udp_listener(udp_recv, users));
+        let acks = Arc::clone(&received_acks);
+        let tx = ack_tx.clone();
+        thread::spawn(move || udp_listener(udp_recv, users, acks, tx));
     }
 
     // Thread: Mengirimkan sinyal HELLO berkala
@@ -62,7 +73,6 @@ fn main() -> io::Result<()> {
     // --- Setup TCP listener ---
     let tcp_listener = TcpListener::bind(("0.0.0.0", tcp_port))?;
     println!("TCP listening on {}", tcp_port);
-
     thread::spawn(move || tcp_server(tcp_listener));
 
     // --- Input utama pengguna ---
@@ -99,40 +109,59 @@ fn main() -> io::Result<()> {
         }
 
         if input.starts_with("/connect ") {
-    let parts: Vec<&str> = input.split_whitespace().collect();
-    if parts.len() == 2 {
-        let target_nick = parts[1];
-        let users = active_users.lock().unwrap();
+            let parts: Vec<&str> = input.split_whitespace().collect();
+            if parts.len() == 2 {
+                let target_nick = parts[1];
+                let users = active_users.lock().unwrap();
 
-        // Cari IP berdasarkan nickname
-        if let Some((ip, _)) = users.iter().find_map(|(ip, (nick, t))| {
-            if nick == target_nick {
-                Some((ip.clone(), t))
+                if let Some((ip, _)) = users.iter().find_map(|(ip, (nick, t))| {
+                    if nick == target_nick {
+                        Some((ip.clone(), t))
+                    } else {
+                        None
+                    }
+                }) {
+                    if let Err(e) = tcp_client(ip.to_string(), tcp_port) {
+                        eprintln!("Failed to connect to {}: {}", ip, e);
+                    }
+                } else {
+                    println!("User '{}' tidak ditemukan.", target_nick);
+                }
             } else {
-                None
+                println!("Usage: /connect <nickname>");
             }
-        }) {
-            if let Err(e) = tcp_client(ip.to_string(), tcp_port) {
-                eprintln!("Failed to connect to {}: {}", ip, e);
-            }
-        } else {
-            println!("User '{}' tidak ditemukan.", target_nick);
+            continue;
         }
-    } else {
-        println!("Usage: /connect <nickname>");
-    }
-    continue;
-}
 
+        // Kirim pesan umum (UDP) dengan ACK
+        let msg_id = MSG_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let full_msg = format!("MSG:{}:{}", msg_id, input);
 
-        // Kirim pesan umum (UDP)
-        udp_socket.send_to(input.as_bytes(), broadcast_addr)?;
+        for attempt in 1..=3 {
+            udp_socket.send_to(full_msg.as_bytes(), broadcast_addr)?;
+            println!("[UDP] Pesan dikirim (attempt {})...", attempt);
+
+            // Tunggu ACK 1 detik
+            if let Ok(received_id) = ack_rx.recv_timeout(Duration::from_secs(1)) {
+                if received_id == msg_id {
+                    println!("[UDP] Pesan berhasil diterima.");
+                    break;
+                }
+            } else if attempt == 3 {
+                eprintln!("[UDP] Pesan tidak diterima setelah 3 kali percobaan.");
+            }
+        }
     }
 
     Ok(())
 }
 
-fn udp_listener(socket: UdpSocket, users: Arc<Mutex<HashMap<String, (String, Instant)>>>) {
+fn udp_listener(
+    socket: UdpSocket,
+    users: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    acks: Arc<Mutex<HashSet<usize>>>,
+    ack_tx: mpsc::Sender<usize>,
+) {
     let mut buf = [0u8; 1024];
     loop {
         if let Ok((amt, src)) = socket.recv_from(&mut buf) {
@@ -141,10 +170,26 @@ fn udp_listener(socket: UdpSocket, users: Arc<Mutex<HashMap<String, (String, Ins
                 let nick = msg.strip_prefix("HELLO:").unwrap_or("Unknown").to_string();
                 let ip = src.ip().to_string();
                 users.lock().unwrap().insert(ip, (nick, Instant::now()));
-            } else {
-                println!("\n[UDP:{}] {}", src, msg);
-                print!("> ");
-                io::stdout().flush().unwrap();
+            } else if msg.starts_with("MSG:") {
+                // Format: MSG:<id>:<content>
+                let parts: Vec<&str> = msg.splitn(3, ':').collect();
+                if parts.len() == 3 {
+                    if let Ok(id) = parts[1].parse::<usize>() {
+                        let content = parts[2];
+                        println!("\n[UDP:{}] {}", src, content);
+                        print!("> ");
+                        io::stdout().flush().unwrap();
+
+                        // Kirim ACK ke pengirim
+                        let ack_msg = format!("ACK:{}", id);
+                        let _ = socket.send_to(ack_msg.as_bytes(), src);
+                    }
+                }
+            } else if msg.starts_with("ACK:") {
+                if let Ok(id) = msg.strip_prefix("ACK:").unwrap_or("").parse::<usize>() {
+                    acks.lock().unwrap().insert(id);
+                    let _ = ack_tx.send(id);
+                }
             }
         }
     }
@@ -167,9 +212,8 @@ fn handle_tcp_client(mut stream: TcpStream) {
     print!("(TCP)> ");
     io::stdout().flush().unwrap();
 
-    // Clone stream untuk reader
     let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut reader_stream = stream.try_clone().unwrap();
+    let mut writer = stream.try_clone().unwrap();
 
     // Thread: menerima pesan
     thread::spawn(move || {
@@ -210,10 +254,11 @@ fn handle_tcp_client(mut stream: TcpStream) {
             break;
         }
 
-        if let Err(e) = writeln!(reader_stream, "{}", msg) {
+        if let Err(e) = writeln!(writer, "{}", msg) {
             eprintln!("Error sending to {}: {}", peer, e);
             break;
         }
+        let _ = writer.flush();
     }
 }
 
@@ -223,7 +268,7 @@ fn tcp_client(ip: String, port: u16) -> io::Result<()> {
     println!("Connected to {} via TCP. Type messages, /exit to close.", addr);
 
     let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut reader_stream = stream.try_clone().unwrap();
+    let mut writer = stream.try_clone().unwrap();
 
     // Thread: menerima pesan dari lawan bicara
     thread::spawn(move || {
@@ -251,7 +296,6 @@ fn tcp_client(ip: String, port: u16) -> io::Result<()> {
         }
     });
 
-    // Thread utama: kirim pesan
     let stdin = io::stdin();
     let mut input = String::new();
     loop {
@@ -266,12 +310,12 @@ fn tcp_client(ip: String, port: u16) -> io::Result<()> {
             break;
         }
 
-        writeln!(reader_stream, "{}", msg)?;
+        writeln!(writer, "{}", msg)?;
+        writer.flush()?;
     }
 
     Ok(())
 }
-
 
 fn local_ip() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0")?;
